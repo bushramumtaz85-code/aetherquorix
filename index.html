@@ -304,10 +304,80 @@ const clock = new THREE.Clock();
 const R = Math.random, clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 let currentScroll = 0, mouseX = 0, mouseY = 0, targetMouseX = 0, targetMouseY = 0;
 const sizes = { width: innerWidth, height: innerHeight };
+const isMobile = innerWidth < 900;
 const shaderUniforms = {
   uTime: { value: 0 }, uResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
   uMouse: { value: new THREE.Vector2() }, uScroll: { value: 0 }
 };
+
+/* Content, nav and scroll-reveal must work even if the 3D scene below
+   fails to init (unsupported WebGL, blocked CDN, low-memory device).
+   These helpers touch only the DOM (no Three.js objects), so they are
+   declared here, outside the try block, and run first. */
+function splitTitlesIntoChars() {
+  document.querySelectorAll('.slide-title').forEach(title => {
+    let html = '', n = 0;
+    title.innerHTML.split(/(<br\s*\/?>)/i).forEach(part => {
+      if (part.toLowerCase().startsWith('<br')) { html += part; return; }
+      for (const ch of part) {
+        if (ch === ' ') html += ' ';
+        else html += `<span class="char" style="transition-delay:${n++ * 0.035}s">${ch}</span>`;
+      }
+    });
+    title.innerHTML = html;
+  });
+}
+function updateGridDots(scroll) {
+  document.querySelectorAll('.grid-dot').forEach((dot, i) => {
+    const startY = (i * 17) % 80 + 10; let speed = 90 + (i * 55) % 180;
+    if (i % 2 === 0) speed = -speed;
+    dot.style.top = `${(((startY + scroll * speed) % 100) + 100) % 100}%`;
+  });
+}
+const RANGES = [[-0.1,0.10],[0.15,0.27],[0.29,0.41],[0.43,0.55],[0.57,0.70],[0.72,0.85],[0.87,1.05]];
+function updateSlides(scroll) {
+  const n = 7;
+  for (let i = 1; i <= n; i++) {
+    const fill = document.getElementById(`dash-fill-${i}`);
+    if (fill) fill.style.height = `${clamp((scroll - (i-1)/n) * n, 0, 1) * 100}%`;
+  }
+  RANGES.forEach(([a, b], i) => document.getElementById(`slide-${i+1}`).classList.toggle('active', scroll >= a && scroll <= b));
+}
+function updateActiveNav(scroll) {
+  document.querySelectorAll('.nav-link, .mobile-nav a').forEach((link) => {
+    const i = +link.dataset.slide;
+    link.classList.toggle('active', scroll >= RANGES[i][0] && scroll <= RANGES[i][1]);
+  });
+}
+function setupNavigation() {
+  const targets = [0.04, 0.21, 0.35, 0.49, 0.635, 0.785, 0.94];
+  document.querySelectorAll('a[data-slide]').forEach(link => link.addEventListener('click', e => {
+    e.preventDefault();
+    const i = +link.dataset.slide;
+    scrollTo({ top: (document.documentElement.scrollHeight - innerHeight) * targets[i], behavior: 'smooth' });
+    document.getElementById('mobileNav').classList.remove('open');
+  }));
+  document.querySelector('.contact-btn').addEventListener('click', e => {
+    e.preventDefault();
+    scrollTo({ top: (document.documentElement.scrollHeight - innerHeight) * 0.94, behavior: 'smooth' });
+  });
+  document.getElementById('menuToggle').addEventListener('click', () => document.getElementById('mobileNav').classList.add('open'));
+  document.getElementById('closeMenu').addEventListener('click', () => document.getElementById('mobileNav').classList.remove('open'));
+}
+
+splitTitlesIntoChars();
+setupNavigation();
+let threeOK = false;
+function fallbackLoop() {
+  if (threeOK) return;
+  const maxScroll = document.documentElement.scrollHeight - innerHeight;
+  const s = maxScroll > 0 ? scrollY / maxScroll : 0;
+  updateSlides(s); updateGridDots(s); updateActiveNav(s);
+  requestAnimationFrame(fallbackLoop);
+}
+fallbackLoop();
+
+try {
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#f6f9fd');
@@ -318,22 +388,22 @@ scene.add(camera);
 createBackgroundShader();
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
 renderer.setSize(sizes.width, sizes.height);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
+renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.5 : 2));
+renderer.shadowMap.enabled = !isMobile;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 2.0;
 
 scene.add(new THREE.AmbientLight('#80AAD3', 0.18));
 const key = new THREE.SpotLight('#C6E6FD', 18);
-key.position.set(4, 6, 3); key.angle = Math.PI / 4; key.penumbra = 0.9; key.castShadow = true;
-key.shadow.mapSize.set(2048, 2048); key.shadow.camera.near = 1; key.shadow.camera.far = 15; key.shadow.bias = -0.001;
+key.position.set(4, 6, 3); key.angle = Math.PI / 4; key.penumbra = 0.9; key.castShadow = !isMobile;
+key.shadow.mapSize.set(isMobile ? 512 : 2048, isMobile ? 512 : 2048); key.shadow.camera.near = 1; key.shadow.camera.far = 15; key.shadow.bias = -0.001;
 scene.add(key);
 const rim = new THREE.DirectionalLight('#5B86B6', 10); rim.position.set(-5, 3, -4); scene.add(rim);
 const mag = new THREE.PointLight('#A81251', 28, 12); mag.position.set(-3, -1, 3); scene.add(mag);
 const fill = new THREE.DirectionalLight('#1B3554', 1.2); fill.position.set(-2, -4, 2); scene.add(fill);
 
-const N = 2600, NODES = 120;
+const N = isMobile ? 1300 : 2600, NODES = isMobile ? 70 : 120;
 const A = new Float32Array(N * 3), Q = new Float32Array(N * 3), X = new Float32Array(N * 3);
 const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), delay = new Float32Array(N);
 const lerpPt = (a, b, t) => a + (b - a) * t;
@@ -394,7 +464,7 @@ const ring = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.012, 8, 128), ringMa
 ring.position.y = 0.1; sculpt.add(ring);
 
 const xGroup = new THREE.Group();
-const xCount = 1800;
+const xCount = isMobile ? 900 : 1800;
 const xPos = new Float32Array(xCount * 3);
 const xCol = new Float32Array(xCount * 3);
 for (let i = 0; i < xCount; i++) {
@@ -452,7 +522,7 @@ function morph(m, time) {
   xGroup.position.z = Math.sin(time * 0.5) * 0.018 * s;
 }
 
-const sparkCount = 450, sparkData = [];
+const sparkCount = isMobile ? 220 : 450, sparkData = [];
 const sparkGeo = new THREE.BufferGeometry();
 const sp = new Float32Array(sparkCount * 3), sc = new Float32Array(sparkCount * 3);
 for (let i = 0; i < sparkCount; i++) {
@@ -502,61 +572,11 @@ function createBackgroundShader() {
   mesh.position.set(0, 0, -8); mesh.renderOrder = -10; camera.add(mesh);
 }
 
-function splitTitlesIntoChars() {
-  document.querySelectorAll('.slide-title').forEach(title => {
-    let html = '', n = 0;
-    title.innerHTML.split(/(<br\s*\/?>)/i).forEach(part => {
-      if (part.toLowerCase().startsWith('<br')) { html += part; return; }
-      for (const ch of part) {
-        if (ch === ' ') html += ' ';
-        else html += `<span class="char" style="transition-delay:${n++ * 0.035}s">${ch}</span>`;
-      }
-    });
-    title.innerHTML = html;
-  });
-}
-function updateGridDots(scroll) {
-  document.querySelectorAll('.grid-dot').forEach((dot, i) => {
-    const startY = (i * 17) % 80 + 10; let speed = 90 + (i * 55) % 180;
-    if (i % 2 === 0) speed = -speed;
-    dot.style.top = `${(((startY + scroll * speed) % 100) + 100) % 100}%`;
-  });
-}
-const RANGES = [[-0.1,0.10],[0.15,0.27],[0.29,0.41],[0.43,0.55],[0.57,0.70],[0.72,0.85],[0.87,1.05]];
-function updateSlides(scroll) {
-  const n = 7;
-  for (let i = 1; i <= n; i++) {
-    const fill = document.getElementById(`dash-fill-${i}`);
-    if (fill) fill.style.height = `${clamp((scroll - (i-1)/n) * n, 0, 1) * 100}%`;
-  }
-  RANGES.forEach(([a, b], i) => document.getElementById(`slide-${i+1}`).classList.toggle('active', scroll >= a && scroll <= b));
-}
-function updateActiveNav(scroll) {
-  document.querySelectorAll('.nav-link, .mobile-nav a').forEach((link) => {
-    const i = +link.dataset.slide;
-    link.classList.toggle('active', scroll >= RANGES[i][0] && scroll <= RANGES[i][1]);
-  });
-}
-function setupNavigation() {
-  const targets = [0.04, 0.21, 0.35, 0.49, 0.635, 0.785, 0.94];
-  document.querySelectorAll('a[data-slide]').forEach(link => link.addEventListener('click', e => {
-    e.preventDefault();
-    const i = +link.dataset.slide;
-    scrollTo({ top: (document.documentElement.scrollHeight - innerHeight) * targets[i], behavior: 'smooth' });
-    document.getElementById('mobileNav').classList.remove('open');
-  }));
-  document.querySelector('.contact-btn').addEventListener('click', e => {
-    e.preventDefault();
-    scrollTo({ top: (document.documentElement.scrollHeight - innerHeight) * 0.94, behavior: 'smooth' });
-  });
-  document.getElementById('menuToggle').addEventListener('click', () => document.getElementById('mobileNav').classList.add('open'));
-  document.getElementById('closeMenu').addEventListener('click', () => document.getElementById('mobileNav').classList.remove('open'));
-}
 function onWindowResize() {
   sizes.width = innerWidth; sizes.height = innerHeight;
   camera.aspect = sizes.width / sizes.height; camera.updateProjectionMatrix();
   renderer.setSize(sizes.width, sizes.height);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.5 : 2));
   shaderUniforms.uResolution.value.set(sizes.width, sizes.height);
 }
 
@@ -604,10 +624,16 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-splitTitlesIntoChars();
 onWindowResize();
+threeOK = true;
 animate();
-setupNavigation();
+
+} catch (err) {
+  console.error('Aetherquorix: 3D scene failed to initialize, showing content-only fallback.', err);
+  threeOK = false;
+  const cv = document.getElementById('webgl');
+  if (cv) cv.style.display = 'none';
+}
 </script>
 </body>
 </html>
